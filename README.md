@@ -1,2 +1,2 @@
 # pydentate
-Graph neural networks for predicting metal-ligand coordination of transition metal complexes
+pydentate is an open source Python-based toolkit for predicting metal-ligand coordination in transition metal complexes. Using only SMILES string representations as inputs, pydentate leverages graph neural networks to predict ligand denticity and coordinating atoms, enabling downstream generation of transition metal complexes with novel metal-ligand combinations in physically realistic coordinations.
