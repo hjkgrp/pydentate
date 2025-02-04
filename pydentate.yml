@@ -1,4 +1,4 @@
-name: chem_test2
+name: pydentate
 channels:
   - conda-forge
   - defaults
@@ -235,4 +235,4 @@ dependencies:
       - wrapt==1.17.2
       - xarray==2023.1.0
       - zipp==3.20.2
-prefix: /home/rolan701/anaconda3/envs/chem_test2
+
