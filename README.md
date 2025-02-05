@@ -5,6 +5,5 @@ pydentate is an open source Python-based toolkit for predicting metal-ligand coo
 Install using conda with the following commands:
 1. `git clone https://github.com/hjkgrp/pydentate`
 2. `cd pydentate`
-3. `conda env create -f pydentate.yml`
+3. `conda env create --name pydentate --file=pydentate.yml`
 4. `conda activate pydentate`
-5. `pip install -e .`
