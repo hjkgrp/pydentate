@@ -183,7 +183,7 @@ def make_predictions():
     global PARAMS
     PARAMS = Featurization_parameters()
     # load data, generate predictions
-    smiles_list = pd.read_csv('holdout_subset.csv')['smiles_rdkit'].tolist()
+    smiles_list = pd.read_csv('holdout_subset.csv')['smiles'].tolist()
     mol_list = [make_mol(smiles) for smiles in smiles_list]
     model.eval()
     preds = []
