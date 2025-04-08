@@ -2,6 +2,7 @@ name: pydentate
 channels:
   - defaults
 dependencies:
+  - pip==22.3.1
   - pip:
       - rdkit==2023.3.3
       - torch==2.1.0
