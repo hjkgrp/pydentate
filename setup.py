@@ -1,3 +1,4 @@
+from setuptools import setup, find_packages
 setup(
 name='pydentate',
 version='1.0.1',
