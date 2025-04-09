@@ -9,9 +9,4 @@ Install via conda with the following commands:
 4. `conda activate pydentate`
 
 Alternatively, users may install via pip as follows:
-1. `git clone https://github.com/hjkgrp/pydentate`
-2. `pip install rdkit==2023.3.3`
-3. `pip install torch==2.1.0`
-4. `pip install numpy==1.24.1`
-5. `pip install pandas==1.5.3`
-6. `pip install tqdm==4.66.1`
+`pip install pydentate`
