@@ -162,7 +162,7 @@ class FFN(nn.Module):
 def make_predictions():
     # load model
     print('Loading training args')
-    state = torch.load('models/coordinating_atoms.pt', map_location=lambda storage, loc: storage)
+    state = torch.load('models/coordinating_atoms.pt', map_location=lambda storage, loc: storage, weights_only=False)
     loaded_state_dict = state['state_dict']
     model = MoleculeModel()
     model_state_dict = model.state_dict()
