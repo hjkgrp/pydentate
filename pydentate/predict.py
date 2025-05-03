@@ -5,6 +5,7 @@ import re
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import os
 
 # featurization
 class Featurization_parameters:
@@ -14,8 +15,9 @@ class Featurization_parameters:
                               'formal_charge': [-1, -2, 1, 2, 0],
                               'chiral_tag': [0, 1, 2, 3],
                               'num_Hs': [0, 1, 2, 3, 4],
-                              'hybridization': [Chem.rdchem.HybridizationType.SP, Chem.rdchem.HybridizationType.SP2, Chem.rdchem.HybridizationType.SP3,
-                                                Chem.rdchem.HybridizationType.SP3D, Chem.rdchem.HybridizationType.SP3D2]}
+                              'hybridization': [Chem.rdchem.HybridizationType.SP, Chem.rdchem.HybridizationType.SP2,
+                                                Chem.rdchem.HybridizationType.SP3, Chem.rdchem.HybridizationType.SP3D,
+                                                Chem.rdchem.HybridizationType.SP3D2]}
 
 def onek_encoding_unk(value, choices):
     encoding = [0] * (len(choices) + 1)
@@ -45,8 +47,7 @@ class MolGraph:
     def __init__(self, mol):
         self.n_atoms = len(mol.GetAtoms())
         f_atoms_list = [atom_features(atom) for atom in mol.GetAtoms()]
-        self.f_bonds, self.a2b, self.b2a, self.b2revb = [], [[] for _ in range(self.n_atoms)], [], []
-        self.n_bonds = 0
+        self.n_bonds, self.f_bonds, self.a2b, self.b2a, self.b2revb = 0, [], [[] for _ in range(self.n_atoms)], [], []
         self.b2br = np.zeros([len(mol.GetBonds()), 2])
         for a1 in range(self.n_atoms):
             for a2 in range(a1 + 1, self.n_atoms):
@@ -97,30 +98,42 @@ def make_mol(s):
 
 # model architectures
 class MoleculeModel(nn.Module):
-    def __init__(self):
+    def __init__(self, task, architecture):
         super().__init__()
-        self.multiclass_softmax = nn.Softmax(dim=1)
-        self.encoder = MPN()
-        self.readout = build_ffn()
+        self.task = task
+        self.encoder = MPN(task, architecture)
+        if task=='coordination_number':
+            self.multiclass_softmax = nn.Softmax(dim=1)
+            self.readout = build_ffn(task, architecture)
+        elif task=='coordinating_atoms':
+            self.readout = MultiReadout(task, architecture)
     def forward(self, mol_graph):
         encodings = self.encoder(mol_graph)
         output = self.readout(encodings)
-        output = self.multiclass_softmax(output)
+        if self.task=='coordination_number':
+            output = self.multiclass_softmax(output)
+        elif self.task=='coordinating_atoms':
+            output = [nn.Sigmoid()(x) for x in output]
         return output
 
 class MPNEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, task, architecture):
         super().__init__()
-        self.dropout = nn.Dropout(0.3)
+        self.task = task
+        self.architecture = architecture
+        self.dropout = nn.Dropout(architecture['dropout'])
         self.act_func = nn.ReLU()
-        self.W_i = nn.Linear(in_features=14+133, out_features=500, bias=False)
-        self.W_h = nn.Linear(in_features=500, out_features=500, bias=False)
-        self.W_o = nn.Linear(in_features=133+500, out_features=500)
+        self.W_i = nn.Linear(in_features=architecture['atom_fdim']+architecture['bond_fdim'],
+                             out_features=architecture['hidden_size'], bias=False)
+        self.W_h = nn.Linear(in_features=architecture['hidden_size'],
+                             out_features=architecture['hidden_size'], bias=False)
+        self.W_o = nn.Linear(in_features=architecture['atom_fdim']+architecture['hidden_size'],
+                             out_features=architecture['hidden_size'])
     def forward(self, mol_graph):
         f_atoms, f_bonds, a2b, b2a, b2revb = mol_graph.f_atoms, mol_graph.f_bonds, mol_graph.a2b, mol_graph.b2a, mol_graph.b2revb
         input = self.W_i(f_bonds)
         message = self.act_func(input)
-        for depth in range(6 - 1):
+        for depth in range(self.architecture['depth'] - 1):
             nei_a_message = message.index_select(dim=0, index=a2b.view(-1)).view(a2b.size() + message.size()[1:])
             message = self.W_h(nei_a_message.sum(dim=1)[b2a] - message[b2revb])
             message = self.dropout(self.act_func(input + message))
@@ -128,29 +141,80 @@ class MPNEncoder(nn.Module):
         a_message = nei_a_message.sum(dim=1)
         a_input = torch.cat([f_atoms, a_message], dim=1)
         atom_hiddens = self.dropout(self.act_func(self.W_o(a_input)))
-        mol_vecs = torch.stack([sum(atom_hiddens) / (mol_graph.n_atoms-1)], dim=0)
-        return mol_vecs
+        if self.task=='coordination_number':
+            mol_vecs = torch.stack([sum(atom_hiddens) / (mol_graph.n_atoms-1)], dim=0)
+            return mol_vecs
+        elif self.task=='coordinating_atoms':
+            return atom_hiddens
 
 class MPN(nn.Module):
-    def __init__(self):
+    def __init__(self, task, architecture):
         super(MPN, self).__init__()
-        self.encoder = nn.ModuleList([MPNEncoder()])
+        # self.task = task
+        # self.architecture = architecture
+        self.encoder = nn.ModuleList([MPNEncoder(task, architecture)])
     def forward(self, mol_graph):
         return self.encoder[0](mol_graph)
 
-def build_ffn():
-    layers = [nn.Dropout(0.3), nn.Linear(in_features=500, out_features=500)]
-    layers.extend([nn.ReLU(), nn.Dropout(0.3), nn.Linear(in_features=500, out_features=500)])
-    layers.extend([nn.ReLU(), nn.Dropout(0.3), nn.Linear(in_features=500, out_features=6)])
+def build_ffn(task, architecture):
+    layers = [nn.Dropout(architecture['dropout']),
+              nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['hidden_size'])]
+    layers.extend([nn.ReLU(), nn.Dropout(architecture['dropout']),
+                   nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['hidden_size'])])
+    if task=='coordination_number':
+        layers.extend([nn.ReLU(), nn.Dropout(architecture['dropout']),
+                       nn.Linear(architecture['hidden_size'], out_features=architecture['ffn_out_size'])])
     return nn.Sequential(*layers)
 
+class MultiReadout(nn.Module):
+    def __init__(self, task, architecture):
+        super().__init__()
+        self.ffn_list = nn.ModuleList([FFN(task, architecture)])
+    def forward(self, input):
+        return [self.ffn_list[0](input)]
+
+class FFN(nn.Module):
+    def __init__(self, task, architecture):
+        super().__init__()
+        self.ffn = nn.Sequential(build_ffn(task, architecture), nn.ReLU())
+        self.ffn_readout = nn.Sequential(nn.Dropout(architecture['dropout']),
+                                         nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['ffn_out_size']))
+    def forward(self, input):
+        input = self.ffn(input)
+        output = self.ffn_readout(input)[1:]
+        return output
+
 # generate predictions
-def make_predictions():
+def make_predictions(input_path, task, smiles_column='SMILES', output_path=False):
+    '''
+    Main function to load trained models and generate predictions of coordination number and coordinating atoms.
+    INPUTS:
+        input_path: str
+            Path to csv where SMILES are stored.
+        task: str
+            Task for model prediction. Must be either 'coordination_number' or 'coordinating_atoms'.
+        smiles_column: str
+            Column in input_path where SMILES are stored.
+            default='SMILES'
+        output_path: str
+            Path to csv where results will be stored.
+            default=task+'_preds.csv'
+    '''
+    
     # load model
     print('Loading training args')
-    state = torch.load('models/coordination_number.pt', map_location=lambda storage, loc: storage, weights_only=False)
+    task = task.lower()
+    if task not in ['coordination_number', 'coordinating_atoms']:
+        raise ValueError("task must be one of 'coordination_number' or 'coordinating_atoms'")
+    output_path = task+'_preds.csv' if not output_path else output_path
+    model_path = os.path.join(os.path.dirname(__file__), 'models', task+'.pt')
+    state = torch.load(model_path, map_location=lambda storage, loc: storage, weights_only=False)
     loaded_state_dict = state['state_dict']
-    model = MoleculeModel()
+    if task=='coordination_number':
+        architecture = {'atom_fdim': 133, 'bond_fdim': 14, 'depth': 6, 'dropout': 0.3, 'ffn_out_size': 6, 'hidden_size': 500}
+    elif task=='coordinating_atoms':
+        architecture = {'atom_fdim': 133, 'bond_fdim': 14, 'depth': 6, 'dropout': 0.35, 'ffn_out_size': 1, 'hidden_size': 600}
+    model = MoleculeModel(task, architecture)
     model_state_dict = model.state_dict()
     pretrained_state_dict = {}
     for loaded_param_name in loaded_state_dict.keys():
@@ -169,8 +233,8 @@ def make_predictions():
     global PARAMS
     PARAMS = Featurization_parameters()
     # load data, generate predictions
-    smiles_list = pd.read_csv('holdout_subset.csv')['smiles'].tolist()
-    mol_list = [make_mol(s) for s in smiles_list]
+    smiles_list = pd.read_csv(input_path)[smiles_column].tolist()
+    mol_list = [make_mol(smiles) for smiles in smiles_list]
     model.eval()
     preds = []
     for mol in tqdm(mol_list):
@@ -179,10 +243,8 @@ def make_predictions():
             pred = model(mol_graph)
         preds.extend(pred)
     preds = [pred.flatten().tolist() for pred in preds]
-    results = {'smiles': smiles_list, 'coordination_number_probabilities': preds}
-    print('Saving predictions to coordination_number_preds.csv')
-    pd.DataFrame(results).to_csv('coordination_number_preds.csv', index=False)
-    return preds
-
-coord_num_preds = make_predictions()
-print('Done predicting!')
+    results = {smiles_column: smiles_list, task+'_probabilities': preds}
+    print(f'Saving predictions to {output_path}')
+    pd.DataFrame(results).to_csv(output_path, index=False)
+    print(f'Done predicting {task}!')
+    return

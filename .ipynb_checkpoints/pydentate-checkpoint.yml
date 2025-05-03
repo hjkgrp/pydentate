@@ -1,0 +1,12 @@
+name: pydentate
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip>=22.3.1
+  - pip:
+      - numpy>=1.24.1
+      - pandas>=1.5.3
+      - rdkit>=2023.3.3
+      - torch>=2.1.0
+      - tqdm>=4.66.1
