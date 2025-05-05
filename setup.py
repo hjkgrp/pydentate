@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 setup(
 name='pydentate',
-version='1.0.5',
+version='1.0.6',
 author='Jacob Toney',
 author_email='jwt@mit.edu',
 description='Graph Neural Networks for Predicting Metal-Ligand Coordination in Transition Metal Complexes',
@@ -20,7 +20,7 @@ install_requires = [
   "torch>=2.1.0",
   "rdkit>=2023.3.3",
   "tqdm>=4.66.1",
-  "jupyterlab>=4.4.1",
+  "jupyter>=1.1.1",
   "pip>=22.3.1"
 ]
 )
