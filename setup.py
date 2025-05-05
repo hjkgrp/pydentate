@@ -20,7 +20,7 @@ install_requires = [
   "torch>=2.1.0",
   "rdkit>=2023.3.3",
   "tqdm>=4.66.1",
-  "jupyerlab>=4.4.1",
+  "jupyterlab>=4.4.1",
   "pip>=22.3.1"
 ]
 )
