@@ -2,6 +2,7 @@ import pandas as pd
 import ast
 import numpy as np
 from rdkit import Chem
+from itertools import combinations
 
 def parse_predictions(input_path, task, task_column=False, smiles_column='SMILES', output_path=False):
     '''
@@ -22,8 +23,8 @@ def parse_predictions(input_path, task, task_column=False, smiles_column='SMILES
             default=task+'_preds.csv'
     '''
     task = task.lower()
-    if task not in ['coordination_number', 'coordinating_atoms']:
-        raise ValueError("task must be one of 'coordination_number' or 'coordinating_atoms'")
+    if task not in ['coordination_number', 'coordinating_atoms', 'hemilability']:
+        raise ValueError("task must be one of 'coordination_number', 'coordinating_atoms', or 'hemilability'")
 
     preds = pd.read_csv(input_path)
     task_column = task+'_probabilities' if not task_column else task_column
@@ -44,6 +45,9 @@ def parse_predictions(input_path, task, task_column=False, smiles_column='SMILES
             mol = Chem.MolFromSmiles(smiles)
             atom_symbols.append([mol.GetAtoms()[atom_idx].GetSymbol() for atom_idx in preds['predicted_coordinating_atoms'][idx]])
         preds['predicted_coordinating_atoms_symbols'] = atom_symbols
+    elif task=='hemilability':
+        preds[task_column] = preds[task_column].apply(lambda probs: probs[0])
+        preds['predicted_hemilability'] = preds[task_column].apply(lambda probs: int(np.round(probs)))
 
     # save processed predictions
     preds.to_csv(output_path, index=False)
@@ -70,7 +74,7 @@ def visualize(smiles, coord_atoms=False, save_image_path=None):
         img.save(save_image_path)
     return
 
-def enforce_consistent_predictions(coordination_number_path, coordinating_atoms_path, output_path='combined_preds.csv', bias=False, smiles_column='SMILES'):
+def enforce_consistent_predictions(coordination_number_path, coordinating_atoms_path, output_path='coordination_preds.csv', bias=False, smiles_column='SMILES'):
     '''
     Update predicted coordination number and coordinating atom indices for internal consistency (i.e., require predicted coordination number = len(coordinating atom indices)).
     INPUTS:
@@ -80,7 +84,7 @@ def enforce_consistent_predictions(coordination_number_path, coordinating_atoms_
             Path to csv where coordinating atom predictions are stored.
         output_path: str
             Path to csv where results will be stored.
-            default='combined_preds.csv'
+            default='coordination_preds.csv'
         bias: str
             Keyword corresponding to which model to apply positive bias towards. If provided, must be either 'coordination_number', 'coordinating_atoms'.
             default=False
@@ -115,7 +119,7 @@ def enforce_consistent_predictions(coordination_number_path, coordinating_atoms_
             # coordination number has lower uncertainty: overwrite coordinating atoms
             if (coord_num_uncertainty[idx] <= coord_atom_uncertainty[idx]) or (len(predicted_coordinating_atoms[idx]) > 6) or bias=='coordination_number':
                 N = predicted_coordination_number[idx]
-                predicted_coordinating_atoms[idx] = np.argsort(coordinating_atoms_probabilities[idx])[-N:][::-1]
+                predicted_coordinating_atoms[idx] = [int(i) for i in np.argsort(coordinating_atoms_probabilities[idx])[-N:][::-1]]
                 smiles = coord_atom_preds[smiles_column][idx]
                 mol = Chem.MolFromSmiles(smiles)
                 predicted_coordinating_atoms_symbols[idx] = [mol.GetAtoms()[int(atom_idx)].GetSymbol() for atom_idx in predicted_coordinating_atoms[idx]]
@@ -135,4 +139,94 @@ def enforce_consistent_predictions(coordination_number_path, coordinating_atoms_
     coord_num_preds.to_csv(output_path, index=False)
 
     print(f'Internal consistency enforced. {update_count} predictions updated.')
+    return
+
+def ensemble_predictions(coordination_preds_path, hemilability_preds_path, output_path='coordination_preds.csv', len_cutoff=3, prob_cutoff=0.1):
+    '''
+    Ensemble predictions from all three models (coordination number, coordinating atoms, hemilability) to predict primary and alternative coordination modes.
+    INPUTS:
+        coordination_preds_path: str
+            Path to csv where coordination number and coordinating atom predictions are stored.
+        hemilability_preds_path: str
+            Path to csv where hemilability predictions are stored.
+        output_path: str
+            Path to csv where ensembled results will be stored.
+            default='coordination_preds.csv'
+        len_cutoff: int
+            Number of alternative coordination modes to return for predicted hemilabile ligands
+            default = 3
+        prob_cutoff: float
+            Coordinating atom probability below which atoms will no longer be considered in alternative coordination modes.
+            Warning: decreasing below default can dramatically increase runtime.
+            default = 0.1
+        
+            Dictionary storing alternative coordination modes the ligand may adopt.
+            Only populated for ligands predicted to be hemilabile (i.e., hemilabile_pred >= 0.5).
+            Sorted in decreasing order according to the predicted probability of each alternative coordination mode.
+    '''
+    # read data
+    coordination_preds = pd.read_csv(coordination_preds_path)
+    hemilability_preds = pd.read_csv(hemilability_preds_path)
+    coordination_preds = pd.merge(coordination_preds, hemilability_preds, on='smiles')
+
+    predicted_coordination_number = coordination_preds['predicted_coordination_number']
+    coordination_number_probs = coordination_preds['coordination_number_probabilities'].apply(ast.literal_eval)
+    predicted_coordinating_atoms = coordination_preds['predicted_coordinating_atoms'].apply(ast.literal_eval)
+    coordinating_atom_probs = coordination_preds['coordinating_atoms_probabilities'].apply(ast.literal_eval)
+    predicted_hemilability = coordination_preds['predicted_hemilability']
+
+    alternative_coordination_modes_list = []
+    ensemble_count = 0
+    # ligand predicted to be nonhemilabile
+    for idx, ligand in enumerate(coordination_preds['smiles']):
+        # ligand predicted to be nonhemilabile; skip ensembling
+        if predicted_hemilability[idx] < 0.5:
+            alternative_coordination_modes = None
+        # ligand predicted to hemilabile; call ensemble algorithm
+        elif predicted_hemilability[idx] >= 0.5:
+            # initialize dict to store possible alternative coordination modes
+            alternative_coordination_modes = {'alternative_coordination_numbers': [], 'alternative_coordinating_atoms': [], 'alternative_coordinating_atoms_symbols': [], 'alternative_probabilities': []}
+            potential_catom_indices = [atom_idx for atom_idx, prob in enumerate(coordinating_atom_probs[idx]) if prob >= prob_cutoff]
+            all_combos = []
+            probabilities = []
+            for num_idx, coord_num in enumerate(coordination_number_probs[idx]):
+                combos = list(combinations(potential_catom_indices, num_idx+1))
+                all_combos.extend(combos)
+                probabilities.extend([np.mean([coord_num] + [coordinating_atom_probs[idx][catom_idx] for catom_idx in combo]) for combo in combos])
+            # convert to sets for easy comparison
+            all_combos = [set(combo) for combo in all_combos]
+            # remove the ML-predicted coordination mode from all_combos, since this will already be returned as the most likely prediction
+            if set(predicted_coordinating_atoms[idx]) in all_combos:
+                remove_idx = all_combos.index(set(predicted_coordinating_atoms[idx]))
+                all_combos.pop(remove_idx)
+                probabilities.pop(remove_idx)
+
+            # rank the possible coordination modes according to their probabilities, save only top three
+            sorted_indices = sorted(range(len(probabilities)), key=lambda i: probabilities[i], reverse=True)
+            top_probabilities = [float(probabilities[i]) for i in sorted_indices][0:len_cutoff]
+            top_combos = [list(all_combos[i]) for i in sorted_indices][0:len_cutoff]
+
+            # get coordinating atom symbols
+            atom_symbols = []
+            for coord_atoms in top_combos:
+                mol = Chem.MolFromSmiles(ligand)
+                atom_symbols.append([mol.GetAtoms()[atom_idx].GetSymbol() for atom_idx in coord_atoms])
+            
+            # store alternative coordination modes
+            alternative_coordination_modes['alternative_coordination_numbers'] = [len(combo) for combo in top_combos]
+            alternative_coordination_modes['alternative_coordinating_atoms'] = top_combos
+            alternative_coordination_modes['alternative_coordinating_atoms_symbols'] = atom_symbols
+            alternative_coordination_modes['alternative_probabilities'] = top_probabilities
+
+            # check whether alternative coordination modes dict is empty (this is possible for predicted hemilabile ligands with no other high-probability coordination modes)
+            is_empty = all(len(val) == 0 for val in alternative_coordination_modes.values())
+            ensemble_count += 1 if not is_empty else 0
+
+        alternative_coordination_modes_list.append(alternative_coordination_modes)
+
+    # save results
+    coordination_preds['alternative_coordination_modes'] = alternative_coordination_modes_list
+    coordination_preds.to_csv(output_path, index=False)
+        
+    print(f'Ensemble algorithm completed. Alternative coordination modes generated for {ensemble_count} ligands.')
     return

@@ -107,13 +107,18 @@ class MoleculeModel(nn.Module):
             self.readout = build_ffn(task, architecture)
         elif task=='coordinating_atoms':
             self.readout = MultiReadout(task, architecture)
-    def forward(self, mol_graph):
-        encodings = self.encoder(mol_graph)
+        elif task=='hemilability':
+            self.readout = build_ffn(task, architecture)
+
+    def forward(self, mol_graph, features=None):
+        encodings = self.encoder(mol_graph, features)
         output = self.readout(encodings)
         if self.task=='coordination_number':
             output = self.multiclass_softmax(output)
         elif self.task=='coordinating_atoms':
             output = [nn.Sigmoid()(x) for x in output]
+        elif self.task=='hemilability':
+            output = nn.Sigmoid()(output)
         return output
 
 class MPNEncoder(nn.Module):
@@ -141,7 +146,7 @@ class MPNEncoder(nn.Module):
         a_message = nei_a_message.sum(dim=1)
         a_input = torch.cat([f_atoms, a_message], dim=1)
         atom_hiddens = self.dropout(self.act_func(self.W_o(a_input)))
-        if self.task=='coordination_number':
+        if self.task in ['coordination_number', 'hemilability']:
             mol_vecs = torch.stack([sum(atom_hiddens) / (mol_graph.n_atoms-1)], dim=0)
             return mol_vecs
         elif self.task=='coordinating_atoms':
@@ -150,20 +155,23 @@ class MPNEncoder(nn.Module):
 class MPN(nn.Module):
     def __init__(self, task, architecture):
         super(MPN, self).__init__()
-        # self.task = task
-        # self.architecture = architecture
         self.encoder = nn.ModuleList([MPNEncoder(task, architecture)])
-    def forward(self, mol_graph):
-        return self.encoder[0](mol_graph)
+        self.task = task
+    def forward(self, mol_graph, features=None):
+        output = self.encoder[0](mol_graph)
+        if self.task in ['coordination_number', 'coordinating_atoms']:
+            return output
+        elif self.task=='hemilability':
+            return torch.cat([output, features], dim=1)
 
 def build_ffn(task, architecture):
-    layers = [nn.Dropout(architecture['dropout']),
-              nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['hidden_size'])]
-    layers.extend([nn.ReLU(), nn.Dropout(architecture['dropout']),
-                   nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['hidden_size'])])
-    if task=='coordination_number':
-        layers.extend([nn.ReLU(), nn.Dropout(architecture['dropout']),
-                       nn.Linear(architecture['hidden_size'], out_features=architecture['ffn_out_size'])])
+    if task in ['coordination_number', 'coordinating_atoms']:
+        layers = [nn.Dropout(architecture['dropout']), nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['hidden_size'])]
+    elif task=='hemilability':
+        layers = [nn.Dropout(architecture['dropout']), nn.Linear(in_features=architecture['hidden_size']+2, out_features=architecture['hidden_size'])]
+    layers.extend([nn.ReLU(), nn.Dropout(architecture['dropout']), nn.Linear(in_features=architecture['hidden_size'], out_features=architecture['hidden_size'])])
+    if task in ['coordination_number', 'hemilability']:
+        layers.extend([nn.ReLU(), nn.Dropout(architecture['dropout']), nn.Linear(architecture['hidden_size'], out_features=architecture['ffn_out_size'])])
     return nn.Sequential(*layers)
 
 class MultiReadout(nn.Module):
@@ -185,27 +193,32 @@ class FFN(nn.Module):
         return output
 
 # generate predictions
-def make_predictions(input_path, task, smiles_column='SMILES', output_path=False):
+def make_predictions(input_path, task, smiles_column='SMILES', output_path=False, features_path=False):
     '''
     Main function to load trained models and generate predictions of coordination number and coordinating atoms.
     INPUTS:
         input_path: str
             Path to csv where SMILES are stored.
         task: str
-            Task for model prediction. Must be either 'coordination_number' or 'coordinating_atoms'.
+            Task for model prediction. Must be either 'coordination_number', 'coordinating_atoms', or 'hemilability'.
         smiles_column: str
             Column in input_path where SMILES are stored.
             default='SMILES'
         output_path: str
             Path to csv where results will be stored.
             default=task+'_preds.csv'
+        features_path: str
+            Path to csv containing coordination feature inputs. Only for use with hemilability prediction model.
+            default=False
     '''
     
     # load model
     print('Loading training args')
     task = task.lower()
-    if task not in ['coordination_number', 'coordinating_atoms']:
-        raise ValueError("task must be one of 'coordination_number' or 'coordinating_atoms'")
+    if task not in ['coordination_number', 'coordinating_atoms', 'hemilability']:
+        raise ValueError("task must be one of 'coordination_number', 'coordinating_atoms', or 'hemilability'")
+    if task=='hemilability' and features_path==False:
+        raise ValueError("coordination features must be specified in 'features_path' for hemilability prediction")
     output_path = task+'_preds.csv' if not output_path else output_path
     model_path = os.path.join(os.path.dirname(__file__), 'models', task+'.pt')
     state = torch.load(model_path, map_location=lambda storage, loc: storage, weights_only=False)
@@ -214,6 +227,8 @@ def make_predictions(input_path, task, smiles_column='SMILES', output_path=False
         architecture = {'atom_fdim': 133, 'bond_fdim': 14, 'depth': 6, 'dropout': 0.3, 'ffn_out_size': 6, 'hidden_size': 500}
     elif task=='coordinating_atoms':
         architecture = {'atom_fdim': 133, 'bond_fdim': 14, 'depth': 6, 'dropout': 0.35, 'ffn_out_size': 1, 'hidden_size': 600}
+    elif task=='hemilability':
+        architecture = {'atom_fdim': 133, 'bond_fdim': 14, 'depth': 6, 'dropout': 0.3, 'ffn_out_size': 1, 'hidden_size': 500}
     model = MoleculeModel(task, architecture)
     model_state_dict = model.state_dict()
     pretrained_state_dict = {}
@@ -235,12 +250,19 @@ def make_predictions(input_path, task, smiles_column='SMILES', output_path=False
     # load data, generate predictions
     smiles_list = pd.read_csv(input_path)[smiles_column].tolist()
     mol_list = [make_mol(smiles) for smiles in smiles_list]
+    if task=='hemilability':
+        features_data = pd.read_csv(features_path)
+        features_data = features_data[['coordination_number_uncertainties', 'coordinating_atoms_uncertainties']]
+        features_data = [np.asarray(features_data.iloc[idx].tolist()) for idx in range(len(features_data))]
+    elif task in ['coordination_number', 'coordinating_atoms']:
+        features_data = [None]*len(mol_list)
     model.eval()
     preds = []
-    for mol in tqdm(mol_list):
+    for mol, features in tqdm(zip(mol_list, features_data)):
         mol_graph = MolGraph(mol)
+        features = torch.from_numpy(features).float().unsqueeze(0) if task=='hemilability' else None
         with torch.no_grad():
-            pred = model(mol_graph)
+            pred = model(mol_graph, features)
         preds.extend(pred)
     preds = [pred.flatten().tolist() for pred in preds]
     results = {smiles_column: smiles_list, task+'_probabilities': preds}
