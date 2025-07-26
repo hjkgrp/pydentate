@@ -24,13 +24,13 @@ def onek_encoding_unk(value, choices):
     encoding[choices.index(value) if value in choices else -1] = 1
     return encoding
 
-def atom_features(atom):
-    features = onek_encoding_unk(atom.GetAtomicNum() - 1, PARAMS.ATOM_FEATURES['atomic_num']) + \
-        onek_encoding_unk(atom.GetTotalDegree(), PARAMS.ATOM_FEATURES['degree']) + \
-        onek_encoding_unk(atom.GetFormalCharge(), PARAMS.ATOM_FEATURES['formal_charge']) + \
-        onek_encoding_unk(int(atom.GetChiralTag()), PARAMS.ATOM_FEATURES['chiral_tag']) + \
-        onek_encoding_unk(int(atom.GetTotalNumHs()), PARAMS.ATOM_FEATURES['num_Hs']) + \
-        onek_encoding_unk(int(atom.GetHybridization()), PARAMS.ATOM_FEATURES['hybridization']) + \
+def atom_features(atom, params):
+    features = onek_encoding_unk(atom.GetAtomicNum() - 1, params.ATOM_FEATURES['atomic_num']) + \
+        onek_encoding_unk(atom.GetTotalDegree(), params.ATOM_FEATURES['degree']) + \
+        onek_encoding_unk(atom.GetFormalCharge(), params.ATOM_FEATURES['formal_charge']) + \
+        onek_encoding_unk(int(atom.GetChiralTag()), params.ATOM_FEATURES['chiral_tag']) + \
+        onek_encoding_unk(int(atom.GetTotalNumHs()), params.ATOM_FEATURES['num_Hs']) + \
+        onek_encoding_unk(int(atom.GetHybridization()), params.ATOM_FEATURES['hybridization']) + \
         [1 if atom.GetIsAromatic() else 0] + [atom.GetMass() * 0.01]
     return features
 
@@ -44,9 +44,9 @@ def bond_features(bond):
 
 # create molecular graph
 class MolGraph:
-    def __init__(self, mol):
+    def __init__(self, mol, params):
         self.n_atoms = len(mol.GetAtoms())
-        f_atoms_list = [atom_features(atom) for atom in mol.GetAtoms()]
+        f_atoms_list = [atom_features(atom, params) for atom in mol.GetAtoms()]
         self.n_bonds, self.f_bonds, self.a2b, self.b2a, self.b2revb = 0, [], [[] for _ in range(self.n_atoms)], [], []
         self.b2br = np.zeros([len(mol.GetBonds()), 2])
         for a1 in range(self.n_atoms):
@@ -259,7 +259,7 @@ def make_predictions(input_path, task, smiles_column='SMILES', output_path=False
     model.eval()
     preds = []
     for mol, features in tqdm(zip(mol_list, features_data)):
-        mol_graph = MolGraph(mol)
+        mol_graph = MolGraph(mol, PARAMS)
         features = torch.from_numpy(features).float().unsqueeze(0) if task=='hemilability' else None
         with torch.no_grad():
             pred = model(mol_graph, features)
