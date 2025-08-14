@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 setup(
 name='pydentate',
-version='1.1.1',
+version='1.1.2',
 author='Jacob Toney',
 author_email='jwt@mit.edu',
 description='Graph Neural Networks for Predicting Metal-Ligand Coordination in Transition Metal Complexes',
