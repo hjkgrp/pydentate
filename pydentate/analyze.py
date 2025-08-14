@@ -141,7 +141,7 @@ def enforce_consistent_predictions(coordination_number_path, coordinating_atoms_
     print(f'Internal consistency enforced. {update_count} predictions updated.')
     return
 
-def ensemble_predictions(coordination_preds_path, hemilability_preds_path, output_path='coordination_preds.csv', len_cutoff=3, prob_cutoff=0.1):
+def ensemble_predictions(coordination_preds_path, hemilability_preds_path, output_path='coordination_preds.csv', smiles_column='SMILES', len_cutoff=3, prob_cutoff=0.1):
     '''
     Ensemble predictions from all three models (coordination number, coordinating atoms, hemilability) to predict primary and alternative coordination modes.
     INPUTS:
@@ -152,6 +152,9 @@ def ensemble_predictions(coordination_preds_path, hemilability_preds_path, outpu
         output_path: str
             Path to csv where ensembled results will be stored.
             default='coordination_preds.csv'
+        smiles_column: str
+            Column where SMILES are stored.
+            default='SMILES'
         len_cutoff: int
             Number of alternative coordination modes to return for predicted hemilabile ligands
             default = 3
@@ -159,15 +162,11 @@ def ensemble_predictions(coordination_preds_path, hemilability_preds_path, outpu
             Coordinating atom probability below which atoms will no longer be considered in alternative coordination modes.
             Warning: decreasing below default can dramatically increase runtime.
             default = 0.1
-        
-            Dictionary storing alternative coordination modes the ligand may adopt.
-            Only populated for ligands predicted to be hemilabile (i.e., hemilabile_pred >= 0.5).
-            Sorted in decreasing order according to the predicted probability of each alternative coordination mode.
     '''
     # read data
     coordination_preds = pd.read_csv(coordination_preds_path)
     hemilability_preds = pd.read_csv(hemilability_preds_path)
-    coordination_preds = pd.merge(coordination_preds, hemilability_preds, on='smiles')
+    coordination_preds = pd.merge(coordination_preds, hemilability_preds, on=smiles_column)
 
     predicted_coordination_number = coordination_preds['predicted_coordination_number']
     coordination_number_probs = coordination_preds['coordination_number_probabilities'].apply(ast.literal_eval)
@@ -178,7 +177,7 @@ def ensemble_predictions(coordination_preds_path, hemilability_preds_path, outpu
     alternative_coordination_modes_list = []
     ensemble_count = 0
     # ligand predicted to be nonhemilabile
-    for idx, ligand in enumerate(coordination_preds['smiles']):
+    for idx, ligand in enumerate(coordination_preds[smiles_column]):
         # ligand predicted to be nonhemilabile; skip ensembling
         if predicted_hemilability[idx] < 0.5:
             alternative_coordination_modes = None
