@@ -11,6 +11,7 @@ Install via conda with the following commands:
 2. `cd pydentate`
 3. `conda env create --name pydentate --file=pydentate.yml`
 4. `conda activate pydentate`
+5. `pip install -e .`
 
 Alternatively, users may install via pip as follows:
 `pip install pydentate`
