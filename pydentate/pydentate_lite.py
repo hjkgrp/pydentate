@@ -1,4 +1,5 @@
-import predict
+from pydentate import predict
+import pydentate
 import numpy as np
 import pandas as pd
 from rdkit import Chem
@@ -6,13 +7,23 @@ import re
 import torch
 import torch.nn as nn
 from itertools import combinations
+from pathlib import Path
+
+
+# Locate the package root (where this file lives)
+BASE_DIR = Path(__file__).resolve().parent
+MODELS_DIR = BASE_DIR / "models"
 
 def pydentate_lite(smiles):
     all_tasks = ['coordination_number', 'coordinating_atoms', 'hemilability']
     all_preds = []
+    coord_img = None
+    alt_img = None
+
+    
     for task in all_tasks:
         # load models
-        model_path = 'models/' + task + '.pt'
+        model_path = MODELS_DIR / f"{task}.pt"
         state = torch.load(model_path, map_location=lambda storage, loc: storage, weights_only=False)
         loaded_state_dict = state['state_dict']
         if task=='coordination_number':
@@ -76,7 +87,7 @@ def pydentate_lite(smiles):
             coord_num = len(coord_atoms)
 
     # visualize coordination mode
-    coord_img = Chem.Draw.MolToImage(mol, size=(500, 500), highlightAtoms=coord_atoms, dpi=500)
+    #coord_img = Chem.Draw.MolToImage(mol, size=(500, 500), highlightAtoms=coord_atoms, dpi=500)
 
     # ensemble algorithm
     prob_cutoff = 0.1
@@ -111,7 +122,7 @@ def pydentate_lite(smiles):
         alternative_coordination_modes['alternative_probabilities'] = top_probabilities
         
         # visualize coordination mode
-        alt_img = Chem.Draw.MolToImage(mol, size=(500, 500), highlightAtoms=top_combos[0], dpi=500)
+        #alt_img = Chem.Draw.MolToImage(mol, size=(500, 500), highlightAtoms=top_combos[0], dpi=500)
     
     # save all results to DataFrame
     results_summary = pd.DataFrame({'smiles': [smiles], 'coordination_number_probabilities': [coord_num_probs], 'predicted_coordination_number': [coord_num],
