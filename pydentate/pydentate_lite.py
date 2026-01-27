@@ -1,4 +1,7 @@
-from pydentate import predict
+try:
+    from pydentate import predict
+except:
+    from . import predict
 import pydentate
 import numpy as np
 import pandas as pd
