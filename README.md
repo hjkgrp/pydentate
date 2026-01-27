@@ -3,7 +3,7 @@ pydentate is an open source Python-based toolkit for predicting metal-ligand coo
 
 For more information and to cite our work, please see the corresponding publications:
 1. [Graph Neural Networks for Predicting Metal–Ligand Coordination of Transition Metal Complexes](https://doi.org/10.1073/pnas.2415658122)
-2. [Identifying Dynamic Metal–Ligand Coordination Modes with Ensemble Learning](https://chemrxiv.org/engage/chemrxiv/article-details/689f4370a94eede154e7a9de)
+2. [Identifying Dynamic Metal–Ligand Coordination Modes with Ensemble Learning](https://doi.org/10.1021/jacs.5c17169)
 
 ### Installation
 Install via conda with the following commands:
